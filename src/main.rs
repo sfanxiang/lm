@@ -183,6 +183,53 @@ impl Attention {
     }
 }
 
+#[derive(Debug)]
+struct MLP {
+    c_fc: nn::Linear, 
+    c_proj: nn::Linear, 
+    //act: nn::ACT2FN  cant seem to find it in nn module
+    dropout: Dropout
+}
+
+impl MLP {
+    fn new<'a, T: Borrow<Path<'a>>>(vs: T, intermediate_size: i64, layer_idx: i64) -> Self {
+        let embed_dim = 768; 
+        let c_fc = nn::linear(
+            vs.borrow() / "c_fc",
+            embed_dim,
+            intermediate_size,
+            Default::default(),
+        ); // TODO   
+        let c_proj = nn::linear(
+            vs.borrow() / "c_proj", 
+            intermediate_size,
+            embed_dim,
+            Default::default(),
+        ); // TODO   
+
+        let activation_function = "gelu_new";
+        //let act = ACT2FN[activation_function]; Not sure how to import ACT2FN from transformers/activation.py yet
+        let dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
+    }
+
+    
+}
+/* 
+struct Block {
+    ln_1: tch::nn::LayerNorm, 
+    attn: Attention,
+    ln_2: tch::nn::LayerNorm,
+    mlp: 
+}
+impl Block {
+    fn new() -> Self {
+        let hidden_size = 768; 
+        let inner_dim = 4*hidden_size;//Because n_inner == None in config, inner_dim = 4*hidden_size 
+        let 
+    }
+}
+*/
+
 fn main() {
     let vs = nn::VarStore::new(Device::Cpu);
 
