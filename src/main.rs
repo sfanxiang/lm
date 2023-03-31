@@ -25,7 +25,7 @@ impl nn::ModuleT for Dropout {
 }
 
 #[derive(Debug)]
-struct Attention {
+struct GPT2Attention {
     bias: Tensor,
     masked_bias: Tensor,
     embed_dim: i64,
@@ -41,7 +41,7 @@ struct Attention {
     resid_dropout: Dropout,
 }
 
-impl Attention {
+impl GPT2Attention {
     fn new<'a, T: Borrow<Path<'a>>>(vs: T, layer_idx: i64) -> Self {
         let max_positions = 1024;
 
@@ -196,15 +196,15 @@ impl nn::ModuleT for NewGELUActivation {
 }
 
 #[derive(Debug)]
-struct MLP {
+struct GPT2MLP {
     c_fc: nn::Linear,
     c_proj: nn::Linear,
     act: NewGELUActivation,
     dropout: Dropout,
 }
 
-impl MLP {
-    fn new<'a, T: Borrow<Path<'a>>>(vs: T, intermediate_size: i64, layer_idx: i64) -> Self {
+impl GPT2MLP {
+    pub fn new<'a, T: Borrow<Path<'a>>>(vs: T, intermediate_size: i64) -> Self {
         let embed_dim = 768;
         let c_fc = nn::linear(
             vs.borrow() / "c_fc",
@@ -230,7 +230,7 @@ impl MLP {
         }
     }
 
-    fn forward_t(&self, hidden_states: &Tensor, train: bool) -> Tensor {
+    pub fn forward_t(&self, hidden_states: &Tensor, train: bool) -> Tensor {
         let mut hidden_states = self.c_fc.forward_t(hidden_states, train);
         hidden_states = self.act.forward_t(&hidden_states, train);
         hidden_states = self.c_proj.forward_t(&hidden_states, train);
@@ -238,27 +238,110 @@ impl MLP {
         hidden_states
     }
 }
-/*
-struct Block {
-    ln_1: tch::nn::LayerNorm,
-    attn: Attention,
-    ln_2: tch::nn::LayerNorm,
-    mlp:
+
+struct GPT2Block {
+    ln_1: nn::LayerNorm,
+    attn: GPT2Attention,
+    ln_2: nn::LayerNorm,
+    mlp: GPT2MLP,
 }
-impl Block {
-    fn new() -> Self {
+
+impl GPT2Block {
+    pub fn new<'a, T: Borrow<Path<'a>>>(vs: T, layer_idx: i64) -> Self {
         let hidden_size = 768;
-        let inner_dim = 4*hidden_size;//Because n_inner == None in config, inner_dim = 4*hidden_size
-        let
+        let inner_dim = 4 * hidden_size;
+        let layer_norm_epsilon = 1e-5;
+
+        let mut layer_norm_config: nn::LayerNormConfig = Default::default();
+        layer_norm_config.eps = layer_norm_epsilon;
+        let ln_1 = nn::layer_norm(vs.borrow(), vec![hidden_size], layer_norm_config);
+        let attn = GPT2Attention::new(vs.borrow(), layer_idx);
+        let ln_2 = nn::layer_norm(vs.borrow(), vec![hidden_size], layer_norm_config);
+
+        let mlp = GPT2MLP::new(vs.borrow(), inner_dim);
+
+        Self {
+            ln_1,
+            attn,
+            ln_2,
+            mlp,
+        }
+    }
+
+    pub fn forward_t(
+        &self,
+        hidden_states: &Tensor,
+        attention_mask: Option<&Tensor>,
+        train: bool,
+    ) -> Tensor {
+        let residual = hidden_states;
+        let mut hidden_states = self.ln_1.forward_t(hidden_states, train);
+        let attn_output = self.attn.forward_t(&hidden_states, attention_mask, train);
+        hidden_states = attn_output + residual;
+
+        let residual = &hidden_states;
+        let mut hidden_states = self.ln_2.forward_t(&hidden_states, train);
+        let feed_forward_hidden_states = self.mlp.forward_t(&hidden_states, train);
+        hidden_states = residual + feed_forward_hidden_states;
+
+        return hidden_states;
     }
 }
-*/
+
+struct GPT2Model {
+    embed_dim: i64,
+    wte: nn::Embedding,
+    wpe: nn::Embedding,
+    drop: Dropout,
+    h: Vec<GPT2Block>,
+    ln_f: nn::LayerNorm,
+}
+
+impl GPT2Model {
+    pub fn new<'a, T: Borrow<Path<'a>>>(vs: T) -> Self {
+        let embed_dim = 768;
+
+        let vocab_size = 50257;
+        let max_position_embeddings = 1024;
+
+        let wte = nn::embedding(vs.borrow(), vocab_size, embed_dim, Default::default());
+        let wpe = nn::embedding(
+            vs.borrow(),
+            max_position_embeddings,
+            embed_dim,
+            Default::default(),
+        );
+
+        let embd_pdrop = 0.1;
+        let drop = Dropout::new(vs.borrow(), embd_pdrop);
+
+        let num_hidden_layers: i64 = 12;
+        let mut h = Vec::with_capacity(num_hidden_layers as usize);
+        for i in 0..num_hidden_layers {
+            h.push(GPT2Block::new(vs.borrow(), i));
+        }
+
+        let layer_norm_epsilon = 1e-5;
+        let mut layer_norm_config: nn::LayerNormConfig = Default::default();
+        layer_norm_config.eps = layer_norm_epsilon;
+        let ln_f = nn::layer_norm(vs.borrow(), vec![embed_dim], layer_norm_config);
+
+        Self {
+            embed_dim,
+            wte,
+            wpe,
+            drop,
+            h,
+            ln_f,
+        }
+    }
+}
 
 fn main() {
     let vs = nn::VarStore::new(Device::Cpu);
 
     let hidden_states = Tensor::zeros(&[1, 8, 768], (Kind::Float, Device::Cpu));
 
-    let attn = Attention::new(&vs.root(), 0);
+    let attn = GPT2Attention::new(&vs.root(), 0);
     let _output = attn.forward_t(&hidden_states, None, false);
 }
