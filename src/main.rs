@@ -7,13 +7,45 @@ use tch::{
 use tch::{IndexOp, Kind, NewAxis, Tensor};
 
 #[derive(Debug)]
+struct Conv1D {
+    weight: Tensor,
+    bias: Tensor,
+}
+
+impl Conv1D {
+    pub fn new<'a, T: Borrow<Path<'a>>>(vs: T, nf: i64, nx: i64) -> Self {
+        let weight = vs.borrow().var(
+            "weight",
+            &[nx, nf],
+            nn::Init::Randn {
+                mean: 0.,
+                stdev: 0.02,
+            },
+        );
+        let bias = vs.borrow().var("bias", &[nf], nn::Init::Const(0.));
+        Self { weight, bias }
+    }
+}
+
+impl nn::ModuleT for Conv1D {
+    fn forward_t(&self, x: &Tensor, _train: bool) -> Tensor {
+        let mut size_out = x.size();
+        *size_out.last_mut().unwrap() = *self.weight.size().last().unwrap();
+        let mut x = self
+            .bias
+            .addmm(&x.reshape(&[-1, *x.size().last().unwrap()]), &self.weight);
+        x = x.reshape(&size_out[..]);
+        x
+    }
+}
+
+#[derive(Debug)]
 struct Dropout {
     p: f64,
 }
 
 impl Dropout {
     pub fn new<'a, T: Borrow<Path<'a>>>(_vs: T, p: f64) -> Self {
-        // TODO
         Self { p }
     }
 }
@@ -25,9 +57,39 @@ impl nn::ModuleT for Dropout {
 }
 
 #[derive(Debug)]
+struct NewGELUActivation {}
+
+impl NewGELUActivation {
+    pub fn new<'a, T: Borrow<Path<'a>>>(_vs: T) -> Self {
+        Self {}
+    }
+}
+
+impl nn::ModuleT for NewGELUActivation {
+    fn forward_t(&self, input: &Tensor, _train: bool) -> Tensor {
+        0.5 * input
+            * (1.0
+                + (2.0f64 / core::f64::consts::PI).sqrt()
+                    * (input + 0.044715f64 * input.pow_tensor_scalar(3.0f64)).tanh())
+    }
+}
+
+#[derive(Debug)]
+struct BaseModelOutput {
+    pub hidden_states: Tensor,
+}
+
+#[derive(Debug)]
+struct CausalLMOutput {
+    pub logits: Tensor,
+}
+
+#[derive(Debug)]
 struct GPT2Attention {
     bias: Tensor,
+    #[allow(dead_code)]
     masked_bias: Tensor,
+    #[allow(dead_code)]
     embed_dim: i64,
     num_heads: i64,
     head_dim: i64,
@@ -35,8 +97,8 @@ struct GPT2Attention {
     scale_attn_weights: bool,
     scale_attn_by_inverse_layer_idx: bool,
     layer_idx: i64,
-    c_attn: nn::Linear,
-    c_proj: nn::Linear,
+    c_attn: Conv1D,
+    c_proj: Conv1D,
     attn_dropout: Dropout,
     resid_dropout: Dropout,
 }
@@ -58,18 +120,8 @@ impl GPT2Attention {
         let scale_attn_weights = true;
 
         let scale_attn_by_inverse_layer_idx = false;
-        let c_attn = nn::linear(
-            vs.borrow() / "c_attn",
-            embed_dim,
-            embed_dim * 3,
-            Default::default(),
-        ); // TODO
-        let c_proj = nn::linear(
-            vs.borrow() / "c_proj",
-            embed_dim,
-            embed_dim,
-            Default::default(),
-        ); // TODO
+        let c_attn = Conv1D::new(vs.borrow() / "c_attn", embed_dim * 3, embed_dim);
+        let c_proj = Conv1D::new(vs.borrow() / "c_proj", embed_dim, embed_dim);
 
         let attn_dropout = Dropout::new(vs.borrow() / "attn_dropout", 0.1);
         let resid_dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
@@ -97,6 +149,7 @@ impl GPT2Attention {
         key: &Tensor,
         value: &Tensor,
         attention_mask: Option<&Tensor>,
+        train: bool,
     ) -> (Tensor, Tensor) {
         let mut attn_weights = query.matmul(&key.transpose(-1, -2));
 
@@ -128,6 +181,10 @@ impl GPT2Attention {
         if let Some(attention_mask) = attention_mask {
             attn_weights = attn_weights + attention_mask;
         }
+
+        attn_weights = attn_weights.softmax(-1, attn_weights.kind());
+        attn_weights = self.attn_dropout.forward_t(&attn_weights, train);
+
         let attn_output = attn_weights.matmul(&value);
 
         (attn_output, attn_weights)
@@ -157,7 +214,7 @@ impl GPT2Attention {
         attention_mask: Option<&Tensor>,
         train: bool,
     ) -> Tensor {
-        let mut split = self.c_attn.forward_t(hidden_states, train);
+        let split = self.c_attn.forward_t(hidden_states, train);
         let mut split = split.split(self.split_size, 2);
         let mut value = split.pop().unwrap();
         let mut key = split.pop().unwrap();
@@ -167,7 +224,8 @@ impl GPT2Attention {
         key = self.split_heads(&key, self.num_heads, self.head_dim);
         value = self.split_heads(&value, self.num_heads, self.head_dim);
 
-        let (mut attn_output, attn_weights) = self.attn(&query, &key, &value, attention_mask);
+        let (mut attn_output, _attn_weights) =
+            self.attn(&query, &key, &value, attention_mask, train);
 
         attn_output = self.merge_heads(&attn_output, self.num_heads, self.head_dim);
         attn_output = self.c_proj.forward_t(&attn_output, train);
@@ -178,27 +236,9 @@ impl GPT2Attention {
 }
 
 #[derive(Debug)]
-struct NewGELUActivation {}
-
-impl NewGELUActivation {
-    pub fn new<'a, T: Borrow<Path<'a>>>(_vs: T) -> Self {
-        Self {}
-    }
-}
-
-impl nn::ModuleT for NewGELUActivation {
-    fn forward_t(&self, input: &Tensor, _train: bool) -> Tensor {
-        0.5 * input
-            * (1.0
-                + (2.0f64 / core::f64::consts::PI).sqrt()
-                    * (input + 0.044715f64 * input.pow_tensor_scalar(3.0f64)).tanh())
-    }
-}
-
-#[derive(Debug)]
 struct GPT2MLP {
-    c_fc: nn::Linear,
-    c_proj: nn::Linear,
+    c_fc: Conv1D,
+    c_proj: Conv1D,
     act: NewGELUActivation,
     dropout: Dropout,
 }
@@ -206,18 +246,8 @@ struct GPT2MLP {
 impl GPT2MLP {
     pub fn new<'a, T: Borrow<Path<'a>>>(vs: T, intermediate_size: i64) -> Self {
         let embed_dim = 768;
-        let c_fc = nn::linear(
-            vs.borrow() / "c_fc",
-            embed_dim,
-            intermediate_size,
-            Default::default(),
-        ); // TODO
-        let c_proj = nn::linear(
-            vs.borrow() / "c_proj",
-            intermediate_size,
-            embed_dim,
-            Default::default(),
-        ); // TODO
+        let c_fc = Conv1D::new(vs.borrow() / "c_fc", intermediate_size, embed_dim);
+        let c_proj = Conv1D::new(vs.borrow() / "c_proj", embed_dim, intermediate_size);
 
         let act = NewGELUActivation::new(vs.borrow());
         let dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
@@ -289,6 +319,7 @@ impl GPT2Block {
 }
 
 struct GPT2Model {
+    #[allow(dead_code)]
     embed_dim: i64,
     wte: nn::Embedding,
     wpe: nn::Embedding,
@@ -335,13 +366,108 @@ impl GPT2Model {
             ln_f,
         }
     }
+
+    pub fn forward_t(
+        &self,
+        input_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+        position_ids: Option<&Tensor>,
+        train: bool,
+    ) -> BaseModelOutput {
+        let input_shape = input_ids.size();
+        let input_ids = input_ids.reshape(&[-1, *input_shape.last().unwrap()]);
+        let batch_size = input_ids.size()[0];
+
+        let device = input_ids.device();
+
+        let position_ids = position_ids.map(|x| x.reshape(&[-1, *input_shape.last().unwrap()]));
+        let past_length = 0; // TODO
+        let position_ids = position_ids.unwrap_or_else(|| {
+            let position_ids = Tensor::arange_start(
+                past_length,
+                *input_shape.last().unwrap() + past_length,
+                (Kind::Int64, device),
+            );
+            position_ids
+                .unsqueeze(0)
+                .reshape(&[-1, *input_shape.last().unwrap()])
+        });
+
+        let attention_mask = attention_mask.map(|attention_mask| {
+            let mut attention_mask = attention_mask.reshape(&[batch_size, -1]);
+            attention_mask = attention_mask.i((.., NewAxis, NewAxis, ..));
+            attention_mask = attention_mask.to_dtype(Kind::Float, false, false);
+            attention_mask = (1.0 - attention_mask) * (-1e10);
+            attention_mask
+        });
+
+        let inputs_embeds = self.wte.forward_t(&input_ids, train);
+        let position_embeds = self.wpe.forward_t(&position_ids, train);
+        let mut hidden_states = inputs_embeds + position_embeds;
+
+        hidden_states = self.drop.forward_t(&hidden_states, train);
+
+        let mut output_shape = input_shape;
+        output_shape.push(*hidden_states.size().last().unwrap());
+
+        for (_i, block) in self.h.iter().enumerate() {
+            let outputs = block.forward_t(&hidden_states, attention_mask.as_ref(), train);
+            hidden_states = outputs;
+        }
+
+        hidden_states = self.ln_f.forward_t(&hidden_states, train);
+        hidden_states = hidden_states.reshape(&output_shape[..]);
+
+        BaseModelOutput { hidden_states }
+    }
+}
+
+struct GPT2LMHeadModel {
+    transformer: GPT2Model,
+    lm_head: nn::Linear,
+}
+
+impl GPT2LMHeadModel {
+    pub fn new<'a, T: Borrow<Path<'a>>>(vs: T) -> Self {
+        let transformer = GPT2Model::new(vs.borrow());
+
+        let n_embd = 768;
+        let vocab_size = 50257;
+        let mut linear_config: nn::LinearConfig = Default::default();
+        linear_config.bias = false;
+        let lm_head = nn::linear(vs.borrow(), n_embd, vocab_size, linear_config);
+
+        Self {
+            transformer,
+            lm_head,
+        }
+    }
+
+    pub fn forward_t(
+        &self,
+        input_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+        position_ids: Option<&Tensor>,
+        train: bool,
+    ) -> CausalLMOutput {
+        let transformer_outputs =
+            self.transformer
+                .forward_t(input_ids, attention_mask, position_ids, train);
+        let hidden_states = transformer_outputs.hidden_states;
+
+        let lm_logits = self.lm_head.forward_t(&hidden_states, train);
+
+        CausalLMOutput { logits: lm_logits }
+    }
 }
 
 fn main() {
     let vs = nn::VarStore::new(Device::Cpu);
 
-    let hidden_states = Tensor::zeros(&[1, 8, 768], (Kind::Float, Device::Cpu));
+    let input_ids = Tensor::of_slice(&[1, 2, 3]);
 
-    let attn = GPT2Attention::new(&vs.root(), 0);
-    let _output = attn.forward_t(&hidden_states, None, false);
+    let model = GPT2LMHeadModel::new(&vs.root());
+    let outputs = model.forward_t(&input_ids, None, None, false);
+
+    outputs.logits.print();
 }
