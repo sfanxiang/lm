@@ -222,7 +222,19 @@ impl MLP {
         let act = NewGELUActivation::new(vs.borrow());
         let dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
 
-        todo!()
+        Self{
+            c_fc, 
+            c_proj,
+            act,
+            dropout
+        }
+    }
+    
+    fn forward_t(&self, hidden_states: &Tensor, train: bool) -> Tensor {
+        let mut hidden_states = self.c_fc.forward_t(hidden_states);
+        hidden_states = self.act.forward_t(hidden_states)
+        hidden_states = self.c_proj.forward_t(hidden_states)
+        hidden_states = self.dropout.forward_t(hidden_states)
     }
 }
 /*
