@@ -114,12 +114,9 @@ impl Attention {
         }
         let query_length = query.size()[query.size().len() - 2];
         let key_length = query.size()[key.size().len() - 2];
-        let causal_mask = self.bias.i((
-            ..,
-            ..,
-            key_length - query_length .. key_length,
-            key_length,
-        ));
+        let causal_mask = self
+            .bias
+            .i((.., .., key_length - query_length..key_length, key_length));
         let mask_value = -1e10;
         let mask_value = tch::Tensor::full(
             &[],
@@ -160,11 +157,8 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         train: bool,
     ) -> Tensor {
-        let mut split = self
-            .c_attn
-            .forward_t(hidden_states, train);
-        let mut split = split
-            .split(self.split_size, 2);
+        let mut split = self.c_attn.forward_t(hidden_states, train);
+        let mut split = split.split(self.split_size, 2);
         let mut value = split.pop().unwrap();
         let mut key = split.pop().unwrap();
         let mut query = split.pop().unwrap();
@@ -184,48 +178,65 @@ impl Attention {
 }
 
 #[derive(Debug)]
+struct NewGELUActivation {}
+
+impl NewGELUActivation {
+    pub fn new<'a, T: Borrow<Path<'a>>>(_vs: T) -> Self {
+        Self {}
+    }
+}
+
+impl nn::ModuleT for NewGELUActivation {
+    fn forward_t(&self, input: &Tensor, _train: bool) -> Tensor {
+        0.5 * input
+            * (1.0
+                + (2.0f64 / core::f64::consts::PI).sqrt()
+                    * (input + 0.044715f64 * input.pow_tensor_scalar(3.0f64)).tanh())
+    }
+}
+
+#[derive(Debug)]
 struct MLP {
-    c_fc: nn::Linear, 
-    c_proj: nn::Linear, 
-    //act: nn::ACT2FN  cant seem to find it in nn module
-    dropout: Dropout
+    c_fc: nn::Linear,
+    c_proj: nn::Linear,
+    act: NewGELUActivation,
+    dropout: Dropout,
 }
 
 impl MLP {
     fn new<'a, T: Borrow<Path<'a>>>(vs: T, intermediate_size: i64, layer_idx: i64) -> Self {
-        let embed_dim = 768; 
+        let embed_dim = 768;
         let c_fc = nn::linear(
             vs.borrow() / "c_fc",
             embed_dim,
             intermediate_size,
             Default::default(),
-        ); // TODO   
+        ); // TODO
         let c_proj = nn::linear(
-            vs.borrow() / "c_proj", 
+            vs.borrow() / "c_proj",
             intermediate_size,
             embed_dim,
             Default::default(),
-        ); // TODO   
+        ); // TODO
 
-        let activation_function = "gelu_new";
-        //let act = ACT2FN[activation_function]; Not sure how to import ACT2FN from transformers/activation.py yet
+        let act = NewGELUActivation::new(vs.borrow());
         let dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
-    }
 
-    
+        todo!()
+    }
 }
-/* 
+/*
 struct Block {
-    ln_1: tch::nn::LayerNorm, 
+    ln_1: tch::nn::LayerNorm,
     attn: Attention,
     ln_2: tch::nn::LayerNorm,
-    mlp: 
+    mlp:
 }
 impl Block {
     fn new() -> Self {
-        let hidden_size = 768; 
-        let inner_dim = 4*hidden_size;//Because n_inner == None in config, inner_dim = 4*hidden_size 
-        let 
+        let hidden_size = 768;
+        let inner_dim = 4*hidden_size;//Because n_inner == None in config, inner_dim = 4*hidden_size
+        let
     }
 }
 */
