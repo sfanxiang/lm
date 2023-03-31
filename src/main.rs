@@ -1,12 +1,8 @@
-use tch::{
-    nn,
-    Device,
-};
-use tch::{Tensor};
+use tch::Tensor;
+use tch::{nn, Device};
 
 mod gpt2;
 use gpt2::GPT2LMHeadModel;
-
 
 fn main() {
     let vs = nn::VarStore::new(Device::Cpu);

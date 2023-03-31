@@ -460,5 +460,3 @@ impl GPT2LMHeadModel {
         CausalLMOutput { logits: lm_logits }
     }
 }
-
-
