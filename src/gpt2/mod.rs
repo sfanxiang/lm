@@ -249,7 +249,7 @@ impl GPT2MLP {
         let c_fc = Conv1D::new(vs.borrow() / "c_fc", intermediate_size, embed_dim);
         let c_proj = Conv1D::new(vs.borrow() / "c_proj", embed_dim, intermediate_size);
 
-        let act = NewGELUActivation::new(vs.borrow());
+        let act = NewGELUActivation::new(vs.borrow() / "act");
         let dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
 
         Self {
@@ -284,11 +284,11 @@ impl GPT2Block {
 
         let mut layer_norm_config: nn::LayerNormConfig = Default::default();
         layer_norm_config.eps = layer_norm_epsilon;
-        let ln_1 = nn::layer_norm(vs.borrow(), vec![hidden_size], layer_norm_config);
-        let attn = GPT2Attention::new(vs.borrow(), layer_idx);
-        let ln_2 = nn::layer_norm(vs.borrow(), vec![hidden_size], layer_norm_config);
+        let ln_1 = nn::layer_norm(vs.borrow() / "ln_1", vec![hidden_size], layer_norm_config);
+        let attn = GPT2Attention::new(vs.borrow() / "attn", layer_idx);
+        let ln_2 = nn::layer_norm(vs.borrow() / "ln_2", vec![hidden_size], layer_norm_config);
 
-        let mlp = GPT2MLP::new(vs.borrow(), inner_dim);
+        let mlp = GPT2MLP::new(vs.borrow() / "mlp", inner_dim);
 
         Self {
             ln_1,
@@ -335,27 +335,32 @@ impl GPT2Model {
         let vocab_size = 50257;
         let max_position_embeddings = 1024;
 
-        let wte = nn::embedding(vs.borrow(), vocab_size, embed_dim, Default::default());
+        let wte = nn::embedding(
+            vs.borrow() / "wte",
+            vocab_size,
+            embed_dim,
+            Default::default(),
+        );
         let wpe = nn::embedding(
-            vs.borrow(),
+            vs.borrow() / "wpe",
             max_position_embeddings,
             embed_dim,
             Default::default(),
         );
 
         let embd_pdrop = 0.1;
-        let drop = Dropout::new(vs.borrow(), embd_pdrop);
+        let drop = Dropout::new(vs.borrow() / "drop", embd_pdrop);
 
         let num_hidden_layers: i64 = 12;
         let mut h = Vec::with_capacity(num_hidden_layers as usize);
         for i in 0..num_hidden_layers {
-            h.push(GPT2Block::new(vs.borrow(), i));
+            h.push(GPT2Block::new(vs.borrow() / "h" / i.to_string(), i));
         }
 
         let layer_norm_epsilon = 1e-5;
         let mut layer_norm_config: nn::LayerNormConfig = Default::default();
         layer_norm_config.eps = layer_norm_epsilon;
-        let ln_f = nn::layer_norm(vs.borrow(), vec![embed_dim], layer_norm_config);
+        let ln_f = nn::layer_norm(vs.borrow() / "ln_f", vec![embed_dim], layer_norm_config);
 
         Self {
             embed_dim,
@@ -424,7 +429,6 @@ impl GPT2Model {
 
 pub struct GPT2LMHeadModel {
     transformer: GPT2Model,
-    lm_head: nn::Linear,
 }
 
 impl GPT2LMHeadModel {
@@ -435,12 +439,8 @@ impl GPT2LMHeadModel {
         let vocab_size = 50257;
         let mut linear_config: nn::LinearConfig = Default::default();
         linear_config.bias = false;
-        let lm_head = nn::linear(vs.borrow(), n_embd, vocab_size, linear_config);
 
-        Self {
-            transformer,
-            lm_head,
-        }
+        Self { transformer }
     }
 
     pub fn forward_t(
@@ -455,7 +455,8 @@ impl GPT2LMHeadModel {
                 .forward_t(input_ids, attention_mask, position_ids, train);
         let hidden_states = transformer_outputs.hidden_states;
 
-        let lm_logits = self.lm_head.forward_t(&hidden_states, train);
+        let weight = &self.transformer.wte.ws;
+        let lm_logits = hidden_states.matmul(&weight.transpose(-2, -1));
 
         CausalLMOutput { logits: lm_logits }
     }
