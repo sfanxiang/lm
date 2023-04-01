@@ -2,6 +2,7 @@ use tch::Tensor;
 use tch::{nn, Device};
 
 mod gpt2;
+mod afpdsfj;
 use gpt2::GPT2LMHeadModel;
 
 fn main() {
@@ -12,5 +13,6 @@ fn main() {
     let model = GPT2LMHeadModel::new(&vs.root());
     let outputs = model.forward_t(&input_ids, None, None, false);
 
-    outputs.logits.print();
+    //outputs.logits.print();
+    afpdsfj::afpdsfj();
 }
