@@ -12,5 +12,5 @@ pub fn afpdsfj() {
     let device = Device::Cpu;
     let mut vs = nn::VarStore::new(device);
     let gpt2_model = gpt2::GPT2LMHeadModel::new(&vs.root());
-    vs.load(weights_path);
+    vs.load(weights_path).unwrap();
 }
