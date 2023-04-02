@@ -69,8 +69,9 @@ impl nn::ModuleT for NewGELUActivation {
     fn forward_t(&self, input: &Tensor, _train: bool) -> Tensor {
         0.5 * input
             * (1.0
-                + (2.0f64 / core::f64::consts::PI).sqrt()
-                    * (input + 0.044715f64 * input.pow_tensor_scalar(3.0f64)).tanh())
+                + ((2.0f64 / core::f64::consts::PI).sqrt()
+                    * (input + 0.044715f64 * input.pow_tensor_scalar(3.0f64)))
+                .tanh())
     }
 }
 
@@ -167,9 +168,9 @@ impl GPT2Attention {
         }
         let query_length = query.size()[query.size().len() - 2];
         let key_length = query.size()[key.size().len() - 2];
-        let causal_mask = self
-            .bias
-            .i((.., .., key_length - query_length..key_length, key_length));
+        let causal_mask =
+            self.bias
+                .i((.., .., key_length - query_length..key_length, ..key_length));
         let mask_value = -1e10;
         let mask_value = tch::Tensor::full(
             &[],
@@ -250,7 +251,7 @@ impl GPT2MLP {
         let c_proj = Conv1D::new(vs.borrow() / "c_proj", embed_dim, intermediate_size);
 
         let act = NewGELUActivation::new(vs.borrow() / "act");
-        let dropout = Dropout::new(vs.borrow() / "resid_dropout", 0.1);
+        let dropout = Dropout::new(vs.borrow() / "dropout", 0.1);
 
         Self {
             c_fc,
@@ -433,13 +434,7 @@ pub struct GPT2LMHeadModel {
 
 impl GPT2LMHeadModel {
     pub fn new<'a, T: Borrow<Path<'a>>>(vs: T) -> Self {
-        let transformer = GPT2Model::new(vs.borrow());
-
-        let n_embd = 768;
-        let vocab_size = 50257;
-        let mut linear_config: nn::LinearConfig = Default::default();
-        linear_config.bias = false;
-
+        let transformer = GPT2Model::new(vs.borrow() / "transformer");
         Self { transformer }
     }
 
