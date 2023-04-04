@@ -38,29 +38,34 @@ fn main() {
     let model = GPT2LMHeadModel::new(&vs.root());
     vs.load(weights_path).unwrap();
 
-    let mut new_sentence = args.sentence;
+    let new_sentence = args.sentence;
     print!("{}", &new_sentence[13..]);
     std::io::stdout().flush().unwrap();
 
-    let bad_id = tokenizer.encode("\nX", None, 512, &TruncationStrategy::LongestFirst, 0).token_ids[0];
+    let bad_id = tokenizer
+        .encode("\nX", None, 512, &TruncationStrategy::LongestFirst, 0)
+        .token_ids[0];
 
     tch::manual_seed(args.seed);
+
+    let input = tokenizer.encode(
+        &new_sentence,
+        None,
+        512,
+        &TruncationStrategy::LongestFirst,
+        0,
+    );
+
+    let mut token_ids = input.token_ids;
+
     for _i in 0..args.max_new_tokens {
-        let input = tokenizer.encode(
-            &new_sentence,
-            None,
-            512,
-            &TruncationStrategy::LongestFirst,
-            0,
-        );
-        let input_ids = Tensor::of_slice(&input.token_ids[..]).i(NewAxis);
+        let input_ids = Tensor::of_slice(&token_ids[..]).i(NewAxis);
 
         let output = model.forward_t(&input_ids, None, None, false);
         let mut logits = output.logits;
         //logits.i((.., .., ..4)).print();
         logits = logits.i((.., -1)) * args.temperature;
-        
-        
+
         //logits.i((.., bad_id)).copy_(&Tensor::of_slice(&[-1e10]));
 
         // topk
@@ -73,11 +78,12 @@ fn main() {
         let (topk_values, _) = logits.topk(topk, -1, true, true);
         // topk_values: (batch, topk)
         let topk_thres = topk_values.i((.., topk - 1, NewAxis));
-        logits = logits.ge_tensor(&topk_thres) * (&logits) + logits.lt_tensor(&topk_thres) * (-1e10);
+        logits =
+            logits.ge_tensor(&topk_thres) * (&logits) + logits.lt_tensor(&topk_thres) * (-1e10);
 
         let probs = logits.softmax(-1, logits.kind());
         let token = probs.multinomial(1, true);
-        
+
         //let token = logits.argmax(Some(-1), false);
 
         let mut token_scalar = [0i64];
@@ -86,7 +92,9 @@ fn main() {
         let str_to_add = tokenizer.decode(&[token_scalar], false, false);
         print!("{}", str_to_add);
         std::io::stdout().flush().unwrap();
-        new_sentence += &str_to_add[..];
+
+        token_ids.push(token_scalar);
+        //new_sentence += &str_to_add[..];
     }
     print!("{}", "\n");
 }
