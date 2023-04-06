@@ -78,6 +78,7 @@ impl nn::ModuleT for NewGELUActivation {
 #[derive(Debug)]
 pub struct BaseModelOutput {
     pub hidden_states: Tensor,
+    pub past_key_values: Option<Vec<(Tensor, Tensor)>>,
 }
 
 #[derive(Debug)]
@@ -212,9 +213,11 @@ impl GPT2Attention {
     pub fn forward_t(
         &self,
         hidden_states: &Tensor,
+        layer_past: Option<(&Tensor, &Tensor)>,
         attention_mask: Option<&Tensor>,
+        use_cache: bool,
         train: bool,
-    ) -> Tensor {
+    ) -> (Tensor, Option<(Tensor, Tensor)>) {
         let split = self.c_attn.forward_t(hidden_states, train);
         let mut split = split.split(self.split_size, 2);
         let mut value = split.pop().unwrap();
@@ -225,6 +228,23 @@ impl GPT2Attention {
         key = self.split_heads(&key, self.num_heads, self.head_dim);
         value = self.split_heads(&value, self.num_heads, self.head_dim);
 
+        match layer_past {
+            Some((key_from_lp, value_from_lp)) => {
+                let past_key = key_from_lp;
+                let past_value = value_from_lp;
+                key = Tensor::cat(&[past_key, &key], -2);
+                value = Tensor::cat(&[past_value, &value], -2);
+            }
+            None(_) => (),
+        }
+        let present =
+        if use_cache {
+            Some((key,value))
+        }
+        else {
+            None
+        }; 
+
         let (mut attn_output, _attn_weights) =
             self.attn(&query, &key, &value, attention_mask, train);
 
@@ -232,7 +252,7 @@ impl GPT2Attention {
         attn_output = self.c_proj.forward_t(&attn_output, train);
         attn_output = self.resid_dropout.forward_t(&attn_output, train);
 
-        attn_output
+        (attn_output, present)
     }
 }
 
@@ -302,12 +322,18 @@ impl GPT2Block {
     pub fn forward_t(
         &self,
         hidden_states: &Tensor,
+        layer_past: Option<(&Tensor, &Tensor)>,
         attention_mask: Option<&Tensor>,
+        use_cache: bool,
         train: bool,
-    ) -> Tensor {
+    ) -> (Tensor, Option<(Tensor, Tensor)>) {
         let residual = hidden_states;
         let mut hidden_states = self.ln_1.forward_t(hidden_states, train);
-        let attn_output = self.attn.forward_t(&hidden_states, attention_mask, train);
+        let attn_outputs = self
+            .attn
+            .forward_t(&hidden_states, layer_past, attention_mask, use_cache, train);
+        let attn_output = attn_outputs.0;
+        let outputs = (attn_outputs.1,);
         hidden_states = attn_output + residual;
 
         let residual = &hidden_states;
@@ -315,7 +341,7 @@ impl GPT2Block {
         let feed_forward_hidden_states = self.mlp.forward_t(&hidden_states, train);
         hidden_states = residual + feed_forward_hidden_states;
 
-        return hidden_states;
+        (hidden_states, outputs.0)
     }
 }
 
@@ -376,10 +402,13 @@ impl GPT2Model {
     pub fn forward_t(
         &self,
         input_ids: &Tensor,
+        mut past_key_values: Option<(&[(&Tensor, &Tensor)])>,
         attention_mask: Option<&Tensor>,
         position_ids: Option<&Tensor>,
+        use_cache: bool,
         train: bool,
     ) -> BaseModelOutput {
+        
         let input_shape = input_ids.size();
         let input_ids = input_ids.reshape(&[-1, *input_shape.last().unwrap()]);
         let batch_size = input_ids.size()[0];
@@ -387,7 +416,14 @@ impl GPT2Model {
         let device = input_ids.device();
 
         let position_ids = position_ids.map(|x| x.reshape(&[-1, *input_shape.last().unwrap()]));
-        let past_length = 0; // TODO
+        match past_key_values {
+            None(_) => {
+                let past_length = 0;
+            }
+            Some(x) => {
+                let past_length = x[0][0].size()[-2];
+            }
+        }
         let position_ids = position_ids.unwrap_or_else(|| {
             let position_ids = Tensor::arange_start(
                 past_length,
@@ -416,15 +452,28 @@ impl GPT2Model {
         let mut output_shape = input_shape;
         output_shape.push(*hidden_states.size().last().unwrap());
 
-        for (_i, block) in self.h.iter().enumerate() {
-            let outputs = block.forward_t(&hidden_states, attention_mask.as_ref(), train);
-            hidden_states = outputs;
+        let mut presents = 
+        if use_cache {
+            Some(Vec::with_capacity(self.h.len()))
+        }
+        else {
+            None
+        };
+
+
+        for (_i, (block, layer_past)) in self.h.iter().zip(past_key_values.iter()).enumerate() {
+            let outputs =
+                block.forward_t(&hidden_states, layer_past, attention_mask.as_ref(), use_cache, train);
+            hidden_states = outputs.0;
+            if use_cache {
+                presents.as_mut().unwrap().push(outputs.1.unwrap());
+            }
         }
 
         hidden_states = self.ln_f.forward_t(&hidden_states, train);
         hidden_states = hidden_states.reshape(&output_shape[..]);
 
-        BaseModelOutput { hidden_states }
+        BaseModelOutput { hidden_states, past_key_values: Some(presents)}
     }
 }
 
