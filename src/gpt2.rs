@@ -84,6 +84,7 @@ pub struct BaseModelOutput {
 #[derive(Debug)]
 pub struct CausalLMOutput {
     pub logits: Tensor,
+    pub past_key_values: Option<Vec<(Tensor, Tensor)>>, 
 }
 
 #[derive(Debug)]
@@ -235,15 +236,10 @@ impl GPT2Attention {
                 key = Tensor::cat(&[past_key, &key], -2);
                 value = Tensor::cat(&[past_value, &value], -2);
             }
-            None(_) => (),
+            None => (),
         }
-        let present =
-        if use_cache {
-            Some((key,value))
-        }
-        else {
-            None
-        }; 
+        //let (key,val) = (key.clone(), val.clone());
+        //let present = if use_cache { Some((key, value)) } else { None };
 
         let (mut attn_output, _attn_weights) =
             self.attn(&query, &key, &value, attention_mask, train);
@@ -252,7 +248,7 @@ impl GPT2Attention {
         attn_output = self.c_proj.forward_t(&attn_output, train);
         attn_output = self.resid_dropout.forward_t(&attn_output, train);
 
-        (attn_output, present)
+        (attn_output, if use_cache { Some((key, value)) } else { None })
     }
 }
 
@@ -329,9 +325,9 @@ impl GPT2Block {
     ) -> (Tensor, Option<(Tensor, Tensor)>) {
         let residual = hidden_states;
         let mut hidden_states = self.ln_1.forward_t(hidden_states, train);
-        let attn_outputs = self
-            .attn
-            .forward_t(&hidden_states, layer_past, attention_mask, use_cache, train);
+        let attn_outputs =
+            self.attn
+                .forward_t(&hidden_states, layer_past, attention_mask, use_cache, train);
         let attn_output = attn_outputs.0;
         let outputs = (attn_outputs.1,);
         hidden_states = attn_output + residual;
@@ -402,13 +398,12 @@ impl GPT2Model {
     pub fn forward_t(
         &self,
         input_ids: &Tensor,
-        mut past_key_values: Option<(&[(&Tensor, &Tensor)])>,
+        mut past_key_values: Option<&[(&Tensor, &Tensor)]>,
         attention_mask: Option<&Tensor>,
         position_ids: Option<&Tensor>,
         use_cache: bool,
         train: bool,
     ) -> BaseModelOutput {
-        
         let input_shape = input_ids.size();
         let input_ids = input_ids.reshape(&[-1, *input_shape.last().unwrap()]);
         let batch_size = input_ids.size()[0];
@@ -416,12 +411,13 @@ impl GPT2Model {
         let device = input_ids.device();
 
         let position_ids = position_ids.map(|x| x.reshape(&[-1, *input_shape.last().unwrap()]));
+        let mut past_length: i64;
         match past_key_values {
-            None(_) => {
-                let past_length = 0;
+            None => {
+                past_length = 0;
             }
             Some(x) => {
-                let past_length = x[0][0].size()[-2];
+                past_length = x[0].0.size()[1];
             }
         }
         let position_ids = position_ids.unwrap_or_else(|| {
@@ -452,18 +448,20 @@ impl GPT2Model {
         let mut output_shape = input_shape;
         output_shape.push(*hidden_states.size().last().unwrap());
 
-        let mut presents = 
-        if use_cache {
+        let mut presents = if use_cache {
             Some(Vec::with_capacity(self.h.len()))
-        }
-        else {
+        } else {
             None
         };
 
-
         for (_i, (block, layer_past)) in self.h.iter().zip(past_key_values.iter()).enumerate() {
-            let outputs =
-                block.forward_t(&hidden_states, layer_past, attention_mask.as_ref(), use_cache, train);
+            let outputs = block.forward_t(
+                &hidden_states,
+                Some(layer_past[0]),
+                attention_mask.as_ref(),
+                use_cache,
+                train,
+            );
             hidden_states = outputs.0;
             if use_cache {
                 presents.as_mut().unwrap().push(outputs.1.unwrap());
@@ -473,7 +471,10 @@ impl GPT2Model {
         hidden_states = self.ln_f.forward_t(&hidden_states, train);
         hidden_states = hidden_states.reshape(&output_shape[..]);
 
-        BaseModelOutput { hidden_states, past_key_values: Some(presents)}
+        BaseModelOutput {
+            hidden_states,
+            past_key_values: presents,
+        }
     }
 }
 
@@ -490,18 +491,23 @@ impl GPT2LMHeadModel {
     pub fn forward_t(
         &self,
         input_ids: &Tensor,
+        past_key_values: Option<&[(&Tensor, &Tensor)]>,
         attention_mask: Option<&Tensor>,
         position_ids: Option<&Tensor>,
+        use_cache: bool,
         train: bool,
     ) -> CausalLMOutput {
         let transformer_outputs =
             self.transformer
-                .forward_t(input_ids, attention_mask, position_ids, train);
+                .forward_t(input_ids, past_key_values, attention_mask, position_ids, use_cache, train);
         let hidden_states = transformer_outputs.hidden_states;
 
         let weight = &self.transformer.wte.ws;
         let lm_logits = hidden_states.matmul(&weight.transpose(-2, -1));
 
-        CausalLMOutput { logits: lm_logits }
+        CausalLMOutput { 
+            logits: lm_logits,
+            past_key_values: transformer_outputs.past_key_values,
+         }
     }
 }

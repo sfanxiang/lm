@@ -61,7 +61,7 @@ fn main() {
     for _i in 0..args.max_new_tokens {
         let input_ids = Tensor::of_slice(&token_ids[..]).i(NewAxis);
 
-        let output = model.forward_t(&input_ids, None, None, false);
+        let output = model.forward_t(&input_ids,None ,None, None, true, false);
         let mut logits = output.logits;
         //logits.i((.., .., ..4)).print();
         logits = logits.i((.., -1)) * args.temperature;
