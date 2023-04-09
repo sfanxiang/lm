@@ -84,7 +84,7 @@ pub struct BaseModelOutput {
 #[derive(Debug)]
 pub struct CausalLMOutput {
     pub logits: Tensor,
-    pub past_key_values: Option<Vec<(Tensor, Tensor)>>, 
+    pub past_key_values: Option<Vec<(Tensor, Tensor)>>,
 }
 
 #[derive(Debug)]
@@ -169,7 +169,7 @@ impl GPT2Attention {
             attn_weights = (&attn_weights) / ((self.layer_idx + 1) as f64)
         }
         let query_length = query.size()[query.size().len() - 2];
-        let key_length = query.size()[key.size().len() - 2];
+        let key_length = key.size()[key.size().len() - 2];
         let causal_mask =
             self.bias
                 .i((.., .., key_length - query_length..key_length, ..key_length));
@@ -248,7 +248,10 @@ impl GPT2Attention {
         attn_output = self.c_proj.forward_t(&attn_output, train);
         attn_output = self.resid_dropout.forward_t(&attn_output, train);
 
-        (attn_output, if use_cache { Some((key, value)) } else { None })
+        (
+            attn_output,
+            if use_cache { Some((key, value)) } else { None },
+        )
     }
 }
 
@@ -454,10 +457,10 @@ impl GPT2Model {
             None
         };
 
-        for (_i, (block, layer_past)) in self.h.iter().zip(past_key_values.iter()).enumerate() {
+        for (i, block) in self.h.iter().enumerate() {
             let outputs = block.forward_t(
                 &hidden_states,
-                Some(layer_past[0]),
+                past_key_values.map(|x| x[i]),
                 attention_mask.as_ref(),
                 use_cache,
                 train,
@@ -497,17 +500,22 @@ impl GPT2LMHeadModel {
         use_cache: bool,
         train: bool,
     ) -> CausalLMOutput {
-        let transformer_outputs =
-            self.transformer
-                .forward_t(input_ids, past_key_values, attention_mask, position_ids, use_cache, train);
+        let transformer_outputs = self.transformer.forward_t(
+            input_ids,
+            past_key_values,
+            attention_mask,
+            position_ids,
+            use_cache,
+            train,
+        );
         let hidden_states = transformer_outputs.hidden_states;
 
         let weight = &self.transformer.wte.ws;
         let lm_logits = hidden_states.matmul(&weight.transpose(-2, -1));
 
-        CausalLMOutput { 
+        CausalLMOutput {
             logits: lm_logits,
             past_key_values: transformer_outputs.past_key_values,
-         }
+        }
     }
 }

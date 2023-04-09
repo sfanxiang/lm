@@ -58,11 +58,27 @@ fn main() {
 
     let mut token_ids = input.token_ids;
 
+    let mut past_key_values = None;
     for _i in 0..args.max_new_tokens {
-        let input_ids = Tensor::of_slice(&token_ids[..]).i(NewAxis);
+        let input_ids = if past_key_values.is_some() {
+            Tensor::of_slice(&token_ids[token_ids.len() - 1..]).i(NewAxis)
+        } else {
+            Tensor::of_slice(&token_ids[..]).i(NewAxis)
+        };
 
-        let output = model.forward_t(&input_ids,None ,None, None, true, false);
+        let past_key_values_ref = past_key_values
+            .as_ref()
+            .map(|x: &Vec<(Tensor, Tensor)>| x.iter().map(|(k, v)| (k, v)).collect::<Vec<_>>());
+        let output = model.forward_t(
+            &input_ids,
+            past_key_values_ref.as_ref().map(|x| &x[..]),
+            None,
+            None,
+            true,
+            false,
+        );
         let mut logits = output.logits;
+        past_key_values = output.past_key_values;
         //logits.i((.., .., ..4)).print();
         logits = logits.i((.., -1)) * args.temperature;
 
