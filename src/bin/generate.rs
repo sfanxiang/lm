@@ -1,4 +1,4 @@
-mod gpt2;
+use lm::gpt2;
 
 use self::gpt2::GPT2LMHeadModel;
 use clap::Parser;
@@ -110,7 +110,6 @@ fn main() {
         std::io::stdout().flush().unwrap();
 
         token_ids.push(token_scalar);
-        //new_sentence += &str_to_add[..];
     }
     print!("{}", "\n");
 }
