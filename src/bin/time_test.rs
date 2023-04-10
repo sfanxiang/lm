@@ -37,7 +37,7 @@ fn main() {
         tch::manual_seed(0);
         let mut past_key_values = None;
         let mut token_ids = input.token_ids.clone();
-        println!("Test {}", i);
+        //println!("Test {}", i);
         for j in 0..(i + 1) * 3 {
             let input_ids = if past_key_values.is_some() {
                 Tensor::of_slice(&token_ids[token_ids.len() - 1..]).i(NewAxis)
@@ -83,11 +83,10 @@ fn main() {
             token.copy_data(&mut token_scalar[..], 1);
             let token_scalar = token_scalar[0];
             let str_to_add = tokenizer.decode(&[token_scalar], false, false);
-            print!("{}", str_to_add);
+            //print!("{}", str_to_add);
 
             token_ids.push(token_scalar);
         }
-        print!("{}", "\n");
         let duration = start.elapsed();
         times_tokens.push((duration.as_millis() as f32 / 1000., (i + 1) * 3));
     }
