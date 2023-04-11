@@ -9,3 +9,4 @@ clap = { version = "3.0", features = ["derive"] }
 openssl = { version = "0.10", features = ["vendored"] }
 rust_tokenizers = "8.0.0"
 tch = "0.10.0"
+plotpy = "0.3.5"
