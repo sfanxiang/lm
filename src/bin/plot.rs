@@ -55,6 +55,7 @@ fn main() -> Result<(), StrError> {
     plot.add(&curve_rust);
     plot.set_labels("Number of New Tokens Generated", "Time [seconds]");
     plot.set_title("Speed of Generating Tokens in Rust vs Python");
+    plot.legend();
     // save figure
     plot.save("../../tmp/Rust_v_Python.pdf")?;
     Ok(())
