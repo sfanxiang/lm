@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tch::{nn, Device, IndexOp, Kind, NewAxis, Tensor};
 
 fn main() {
-    let mut times_tokens: Vec<(f32, u32)> = Vec::new();
+    let mut times_tokens: Vec<f32> = Vec::new();
     let device = Device::Cpu;
 
     let tokenizer = Gpt2Tokenizer::from_file("vocab.json", "merges.txt", false).unwrap();
@@ -32,13 +32,14 @@ fn main() {
         0,
     );
 
-    for i in 0..10 {
+    for i in 0..20 {
+        //print!("{}", &new_sentence[13..]);
         let start = Instant::now();
         tch::manual_seed(0);
         let mut past_key_values = None;
         let mut token_ids = input.token_ids.clone();
         //println!("Test {}", i);
-        for j in 0..(i + 1) * 3 {
+        for j in 0..(i + 1) * 5 {
             let input_ids = if past_key_values.is_some() {
                 Tensor::of_slice(&token_ids[token_ids.len() - 1..]).i(NewAxis)
             } else {
@@ -61,7 +62,7 @@ fn main() {
             //logits.i((.., .., ..4)).print();
             logits = logits.i((.., -1));
 
-            //logits.i((.., bad_id)).copy_(&Tensor::of_slice(&[-1e10]));
+            logits.i((.., bad_id)).copy_(&Tensor::of_slice(&[-1e10]));
 
             // topk
             // logits: (batch, num_tokens)
@@ -87,8 +88,9 @@ fn main() {
 
             token_ids.push(token_scalar);
         }
+        //print!("{}","\n");
         let duration = start.elapsed();
-        times_tokens.push((duration.as_millis() as f32 / 1000., (i + 1) * 3));
+        times_tokens.push(duration.as_millis() as f32 / 1000.);
     }
 
     println!("{:?}", times_tokens);

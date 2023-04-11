@@ -82,7 +82,7 @@ fn main() {
         //logits.i((.., .., ..4)).print();
         logits = logits.i((.., -1)) * args.temperature;
 
-        //logits.i((.., bad_id)).copy_(&Tensor::of_slice(&[-1e10]));
+        logits.i((.., bad_id)).copy_(&Tensor::of_slice(&[-1e10]));
 
         // topk
         // logits: (batch, num_tokens)
