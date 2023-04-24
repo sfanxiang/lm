@@ -401,7 +401,7 @@ impl GPT2Model {
     pub fn forward_t(
         &self,
         input_ids: &Tensor,
-        mut past_key_values: Option<&[(&Tensor, &Tensor)]>,
+        past_key_values: Option<&[(&Tensor, &Tensor)]>,
         attention_mask: Option<&Tensor>,
         position_ids: Option<&Tensor>,
         use_cache: bool,
@@ -414,7 +414,7 @@ impl GPT2Model {
         let device = input_ids.device();
 
         let position_ids = position_ids.map(|x| x.reshape(&[-1, *input_shape.last().unwrap()]));
-        let mut past_length: i64;
+        let past_length: i64;
         match past_key_values {
             None => {
                 past_length = 0;
