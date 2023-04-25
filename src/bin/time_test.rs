@@ -83,7 +83,7 @@ fn main() {
             let mut token_scalar = [0i64];
             token.copy_data(&mut token_scalar[..], 1);
             let token_scalar = token_scalar[0];
-            let str_to_add = tokenizer.decode(&[token_scalar], false, false);
+            let _str_to_add = tokenizer.decode(&[token_scalar], false, false);
             //print!("{}", str_to_add);
 
             token_ids.push(token_scalar);
